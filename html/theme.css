@@ -1,9 +1,9 @@
 
-.hljs-literal,
 .hljs-keyword {
     color: #569CD6
 }
 /* .hljs-type, */
+.hljs-literal,
 .hljs-number {
     color: #7FB347
 }
@@ -63,4 +63,5 @@
 
 pre {
     font-family: Consolas, 'Courier New', monospace;
+    font-size: x-large;
 }

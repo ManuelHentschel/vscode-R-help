@@ -6,14 +6,24 @@ import * as helpServer from './helpServer';
 
 import * as jsdom from 'jsdom';
 
-import * as showdown from 'showdown';
+// import * as showdown from 'showdown';
+
+import * as fs from 'fs';
 
 import * as hljs from 'highlight.js';
+
+let extensionPath: string = '';
+
+function makeExtensionPath(fileName: string): string {
+	return path.join(extensionPath, fileName);
+}
 
 
 export function activate(context: vscode.ExtensionContext) {
 
 	console.log('Activating...');
+
+	extensionPath = context.extensionPath;
 
 	const rHelpPanelOptions = {
 		webviewScriptPath: path.join(context.extensionPath, 'script.js'),
@@ -23,11 +33,14 @@ export function activate(context: vscode.ExtensionContext) {
 	const rHelpPanel = new RHelpPanel(rHelpPanelOptions);
 
 	let disposable = vscode.commands.registerCommand('rhelp.showHelp', () => {
-		rHelpPanel.showHelpForInput();
-		// rHelpPanel.showHelp('help', 'utils'); // for debugging
+		// rHelpPanel.showHelpForInput();
+		rHelpPanel.showHelp('help', 'utils'); // for debugging
 	});
 
 	context.subscriptions.push(disposable);
+
+
+	rHelpPanel.showHelp('help', 'utils'); // for debugging
 
 	console.log('Done Activating.');
 }
@@ -113,12 +126,16 @@ class RHelpPanel {
 
 		let html: string = this.rHelp.getHtmlForFunction(pkgName, fncName);
 		html = pimpMyHelp(html);
-		console.log(this.webviewStyleUri);
-		console.log(this.webviewStyleFile);
+
+		// for debugging:
+		if(true){
+			const htmlFile = html + `\n<link rel="stylesheet" href="theme.css"></link>`;
+			fs.writeFileSync(makeExtensionPath(`html/${fncName}.html`), htmlFile);
+		}
+
 		html += `\n<link rel="stylesheet" href="${this.webviewStyleUri}"></link>`;
 		html += `\n<script src=${this.webviewScriptUri}></script>`;
 
-		console.log(html);
 
 		webview.html = html;
 		this.currentPackage = pkgName;
@@ -148,10 +165,6 @@ function pimpMyHelp(html: string): string {
 
 	// parse the html string
 	const dom = new jsdom.JSDOM(html);
-
-	// set up converter for syntax highlighting
-	const converter = new showdown.Converter();
-	converter.setFlavor('github');
 
 	// find all code sections (indicated by 'pre' tags)
 	const codeSections = dom.window.document.body.getElementsByTagName('pre');
