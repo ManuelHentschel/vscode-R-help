@@ -45,8 +45,11 @@ export class RHelpPanel {
 	private forwardHistory: HistoryEntry[] = [];
 
 	constructor(options: RHelpPanelOptions){
-		// this.rHelp = new rHelp.RHelp(options);
-		this.rHelp = new RHelpClient(options);
+		if(options.rHelpProvider === 'custom'){
+			this.rHelp = new rHelp.RHelp(options);
+		} else{ // === 'builtin'
+			this.rHelp = new RHelpClient(options);
+		}
 		this.webviewScriptFile = vscode.Uri.file(options.webviewScriptPath);
 		this.webviewStyleFile = vscode.Uri.file(options.webviewStylePath);
 	}
