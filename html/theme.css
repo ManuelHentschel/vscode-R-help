@@ -1,11 +1,16 @@
 
-.hljs-keyword {
-    color: #569CD6
-}
-/* .hljs-type, */
+
+
+/* I tried to mimic VS Code's Dark+ theme with these colors: */
+
 .hljs-literal,
+.hljs-keyword {
+    color: #569cd6
+}
+
+/* .hljs-type, */
 .hljs-number {
-    color: #7FB347
+    color: #b5cea8
 }
 
 .hljs-regexp,
@@ -27,7 +32,7 @@
 .hljs-params, */
 .hljs-quote,
 .hljs-comment {
-    color: #608B4E
+    color: #6A9955
 }
 /* .hljs-doctag,
 .hljs-meta,
@@ -63,5 +68,22 @@
 
 pre {
     font-family: Consolas, 'Courier New', monospace;
-    font-size: x-large;
+    font-size: 14px;
 }
+
+code {
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 14px;
+}
+/* 
+a {
+    text-decoration: none;
+} */
+
+/* td {
+    font-size: 14px;
+} */
+
+/* p {
+    font-size: 16px;
+} */

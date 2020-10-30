@@ -1,6 +1,7 @@
 {
 	"name": "rhelp",
 	"displayName": "rHelp",
+	"publisher": "rDebugger",
 	"description": "",
 	"version": "0.0.1",
 	"engines": {
@@ -10,8 +11,9 @@
 		"Other"
 	],
 	"activationEvents": [
+		"*",
 		"onCommand:rhelp.showHelp",
-		"*"
+		"onCommand:rhelp.showDoc"
 	],
 	"repository": {
 		"type": "github",
@@ -23,6 +25,10 @@
 			{
 				"command": "rhelp.showHelp",
 				"title": "R Help: Show help"
+			},
+			{
+				"command": "rhelp.showDoc",
+				"title": "R Help: Show R docs"
 			}
 		]
 	},
@@ -41,6 +47,8 @@
 		"@types/mocha": "^8.0.0",
 		"@types/node": "^12.11.7",
 		"@types/vscode": "^1.50.0",
+		"@types/highlight.js": "^9.12.4",
+		"@types/showdown": "^1.9.3",
 		"@typescript-eslint/eslint-plugin": "^4.1.1",
 		"@typescript-eslint/parser": "^4.1.1",
 		"eslint": "^7.9.0",
@@ -50,9 +58,6 @@
 		"vscode-test": "^1.4.0"
 	},
 	"dependencies": {
-		"@types/highlight.js": "^9.12.4",
-		"@types/showdown": "^1.9.3",
-		"express": "^4.17.1",
 		"highlight.js": "^10.3.1",
 		"jsdom": "^16.4.0",
 		"showdown": "^1.9.1"
