@@ -5,69 +5,64 @@ import * as cp from 'child_process';
 
 import * as http from 'http';
 
-import * as rHelp from './rHelpProvider';
+import * as rHelpPanel from './rHelpPanel';
 
-export interface RHelpClientOptions {
+export interface RHelpClientOptions extends rHelpPanel.RHelpProviderOptions {
 	// path of the R executable. Could be left out (with limited functionality)
     rPath: string;
 }
 
 
-export class RHelpClient implements rHelp.RHelpProvider {
+// Class to forward help requests to a backgorund R instance that is running a help server
+export class RHelpClient implements rHelpPanel.HelpProvider {
     private cp: cp.ChildProcess;
     private port: number|Promise<number>;
     private readonly rPath: string;
 
-
     public constructor(options: RHelpClientOptions){
-        this.rPath = options.rPath;
-        this.port = this.launchRHelpServer();
+        this.rPath = options.rPath || 'R';
+        this.port = this.launchRHelpServer(); // is a promise for now!
     }
 
     public async launchRHelpServer(){
-        console.log('Launching R help server');
+        // starts the background help server and waits forever to keep the R process running
         const cmd = (
             `${this.rPath} -e --silent --no-echo --vanilla ` +
             `"cat(tools::startDynamicHelp(),'\\n'); while(TRUE) Sys.sleep(1)" ` 
         );
-
         this.cp = cp.exec(cmd);
 
-        console.log('Called exec.');
-
-        const outputPromise = new Promise<string>((resolve) => {
+        // promise containing the first output of the r process (contains only the port number)
+        const outputPromise = new Promise<string>((resolve, reject) => {
             this.cp.stdout.on('data', (data) => {
-                console.log(data.toString());
                 resolve(data.toString());
+            });
+            this.cp.on('close', (code) => {
+                console.log('R process closed with code ' + code);
+                reject();
             });
         });
 
+        // await and store port number
         const output = await outputPromise;
-
         const port = Number(output);
 
-        console.log('Got port: ' + port);
-
+        // is returned as a promise if not called with "await":
         return port;
     }
 
-    public getHelpFileForDoc(docFile: string){
-        const requestPath = `doc/html/${docFile}`;
-        return this.getHelpFileFromRequestPath(requestPath);
-    }
-
-    public getHelpFileForFunction(pkgName: string, fncname: string){
-        const requestPath = `library/${pkgName}/html/${fncname}.html`;
-        return this.getHelpFileFromRequestPath(requestPath);
-    }
-
     public async getHelpFileFromRequestPath(requestPath: string){
+        // make sure the server is actually running
         this.port = await this.port;
+
+        // remove leading '/'
         while(requestPath.startsWith('/')){
             requestPath = requestPath.substr(1);
         }
+    
+        // forward request to R instance
+        // below is just a complicated way of getting a http response from the help server
         const url = `http://localhost:${this.port}/${requestPath}`;
-        console.log('requesting: ' + url);
         const htmlPromise = new Promise<string>((resolve, reject) => {
             let content: string = '';
             http.get(url, (res: http.IncomingMessage) => {
@@ -85,14 +80,12 @@ export class RHelpClient implements rHelp.RHelpProvider {
 
         const html = await htmlPromise;
 
-        const ret: rHelp.HelpFile = {
-            ...rHelp.splitRequestPath(requestPath),
+        // return help file
+        const ret: rHelpPanel.HelpFile = {
+            requestPath: requestPath,
             html: html,
             isRealFile: false
         };
-
-        console.log('Returning helpfile');
-
         return ret;
     }
 
@@ -101,7 +94,6 @@ export class RHelpClient implements rHelp.RHelpProvider {
             this.cp.kill();
         }
     }
-
 }
 
 

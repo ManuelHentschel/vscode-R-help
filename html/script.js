@@ -1,27 +1,15 @@
 
-
-const vscode = acquireVsCodeApi(); // acquireVsCodeApi can only be invoked once
-
-// window.location.href = 'vscode-webview://a/b/c/d/e/f/R.html';
-
-// window.location.replace('vscode-webview://a/b/c/d/e/f/R.html');
-
-sendMessage = function(msg){
-    vscode.postMessage({
-        message: 'text',
-        text: msg
-    });
-};
-
-sendMessage('Hello world!');
-
-var elements = document.getElementsByTagName("a"); 
+// used to communicate with vscode, can only be invoked once:
+const vscode = acquireVsCodeApi(); 
 
 
-for(var i=0; i<elements.length; i++){
-    const href = elements[i].href;
+// notify vscode when links are clicked:
+var hyperLinks = document.getElementsByTagName("a"); 
+
+for(var i=0; i<hyperLinks.length; i++){
+    const href = hyperLinks[i].href;
     console.log(' href: ' + href);
-    elements[i].onclick = () => { 
+    hyperLinks[i].onclick = () => { 
         vscode.postMessage({
             message: 'linkClicked',
             href: href
@@ -29,8 +17,8 @@ for(var i=0; i<elements.length; i++){
     };
 }
 
-
-
+// notify vscode when mouse buttons are clicked
+// used to implement back/forward on mouse buttons 3/4
 window.onmousedown = (ev) => {
     vscode.postMessage({
         message: 'mouseClick',

@@ -11,28 +11,20 @@ import * as os from 'os';
 
 import { randomBytes } from 'crypto';
 
+import * as rHelpPanel from './rHelpPanel';
 
 
-export interface RHelpProvider {
-	getHelpFileFromRequestPath(requestPath: string, prevFileLocation?: HelpFileLocation): HelpFile|Promise<HelpFile>;
-
-	getHelpFileForDoc(fncName: string): HelpFile|Promise<HelpFile>;
-	getHelpFileForFunction(pkgName: string, fncName: string): HelpFile|Promise<HelpFile>;
-
-	dispose(): void;
-}
-
-
-export interface RHelpOptions {
+export interface RHelpOptions extends rHelpPanel.RHelpProviderOptions {
 	// path of the R executable. Could be left out (with limited functionality)
-	rPath: string;
+	rPath?: string;
 	// paths of installed R packages. Can be left out if rPath is provided.
 	libPaths?: string[];
 	// value of R.home()
 	homePath?: string;
 }
 
-export interface HelpFileLocation {
+// used internally to store the parts of the path of a help file
+interface HelpFileLocation {
 	// path of the libLoc/homePath where the file was found
 	truncPath: string;
 	// directory of the file relative to the truncPath. Not necessarily an actual dir!
@@ -41,7 +33,8 @@ export interface HelpFileLocation {
 	fileName: string;
 }
 
-export class HelpFileLocation implements HelpFileLocation {
+// helper to quickly create an instance of the itnerface above
+class HelpFileLocation implements HelpFileLocation {
 	constructor(
 		public truncPath: string='',
 		public relPath: string='',
@@ -49,73 +42,53 @@ export class HelpFileLocation implements HelpFileLocation {
 	){};
 }
 
-
-export interface HelpDir extends HelpFileLocation {
-	// path of the dir containing PKGNAME.rdb / .rdx
-	helpDir: string;
-}
-
-
-export interface HelpFile {
-	// content of the file
-    html: string;
-    // path as used by help server
-	requestPath: string;
-	// filename as used by help server
-	requestFilename: string;
-	// path as used by help server, without filename
-	requestDirname: string;
+// include flag if file is real and (if applicable) file location on disk
+interface HelpFile extends rHelpPanel.HelpFile {
     // file location
     fileLocation?: HelpFileLocation;
     // is real file
     isRealFile: boolean;
 }
 
-export function splitRequestPath(requestPath: string):{
-	requestPath: string,
-	requestFilename: string,
-	requestDirname: string
-} {
-	requestPath.replace(/\\/g, '/');
-	const parts = requestPath.split('/');
-	const requestFilename = parts.pop();
-	const requestDirname = parts.join('/');
-	return {
-		requestPath: requestPath,
-		requestFilename: requestFilename,
-		requestDirname: requestDirname
-	};
-}
 
-
-export class RHelp implements RHelpProvider {
+// is basically a cusotm implementation of the internal R help server
+// might be useful to provide help for non installed packages, custom help pages etc.
+// theoratically doesn't need to run R to provide help from .html files 
+// (not sure if there is a scenario where this is useful...)
+export class RHelp implements rHelpPanel.HelpProvider {
+	// R executable
 	readonly rPath: string;
+	// libraries as returned by .libPaths()
 	readonly libPaths: string[];
+	// homepath as returned by R.hom()
 	readonly homePath: string;
+	// temp directory used to extract .Rd file to
 	readonly tempDir: string;
 
-	constructor(options: RHelpOptions = {rPath: 'R'}) {
+	constructor(options: RHelpOptions = {}) {
 		this.rPath = options.rPath || 'R';
 
+		// make new (randomly named) temp dir for this session
 		this.tempDir = path.join(os.tmpdir(), 'vscode-R-Help-' + randomBytes(10).toString('hex'));
-		console.log(this.tempDir);
-
 		fs.mkdirSync(this.tempDir);
 
+		// read homePath from options or query R
 		if(options.homePath){
 			this.homePath = options.homePath;
 		} else if(this.rPath){
+			// use R.home() in R
 			const cmd = `${this.rPath} --silent --vanilla --no-echo -e "cat(R.home())"`;
 			this.homePath = cp.execSync(cmd).toString();
 		} else {
 			this.homePath = "";
 		}
 
+		// read liPaths from options or query R
 		if (options.libPaths) {
 			// libPaths supplied -> store
 			this.libPaths = options.libPaths;
 		} else if (this.rPath) {
-			// get .libPaths() from R
+			// use .libPaths() in R
 			const cmd = `${this.rPath} --silent --vanilla --no-echo -e "cat(paste(.libPaths(), collapse='\\n'))"`;
 			const libPathString = cp.execSync(cmd).toString();
 			this.libPaths = libPathString.replace('\r', '').split('\n');
@@ -123,75 +96,57 @@ export class RHelp implements RHelpProvider {
 			// not good... throw error?
 			this.libPaths = [];
 		}
-		console.log(`Homepath:\n${this.homePath}\n\nlibPaths:\n${this.libPaths}`);
 	}
 
 	public dispose() {
+		// remove temp directory
 		const options: fs.RmDirOptions = {
 			recursive: true
 		};
 		fs.rmdir(this.tempDir, options, () => null);
     }
 
-    public getHelpFileForDoc(docFile: string){
-        const requestPath = `doc/html/${docFile}`;
-        return this.getHelpFileFromRequestPath(requestPath);
-    }
-
-    public getHelpFileForFunction(pkgName: string, fncname: string){
-        const requestPath = `library/${pkgName}/html/${fncname}.html`;
-        return this.getHelpFileFromRequestPath(requestPath);
-    }
-
-    public getHtmlFromFileLocation(fileLocation: HelpFileLocation): string {
-        const parts = [
-            fileLocation.relPath,
-            fileLocation.relPath,
-            fileLocation.fileName
-        ];
-        const fullPath = path.normalize(path.join(...parts));
-        try{
-            const html = fs.readFileSync(fullPath, 'utf-8');
-            return html;
-        } catch(e){}
-        return '';
-    }
-
+	// main public interface
     public getHelpFileFromRequestPath(requestPath: string, prevFileLocation?: HelpFileLocation): HelpFile|null {
-        let helpFile: HelpFile|null;
+		let helpFile: HelpFile|null;
+		// try to read help from real file:
         helpFile = this.getRealFileFromRequestPath(requestPath, prevFileLocation);
         if(helpFile){
             return helpFile;
         }
 
+		// fall back to extracting help form an .rdb file:
         helpFile = this.extractHelpFileFromRequestPath(requestPath);
-        
-        return helpFile;
+		
+        return helpFile; // (might be null)
     }
 
-    public getRealFileFromRequestPath(requestPath: string, prevFileLocation?: HelpFileLocation): HelpFile|null {
+	// finds an actual (html)-file for the specified requestPath, if it exists
+    private getRealFileFromRequestPath(requestPath: string, prevFileLocation?: HelpFileLocation): HelpFile|null {
 
 		const fileName = path.basename(requestPath);
 		const relPath = path.dirname(requestPath);
 
-		console.log(`Getting help for path: ${requestPath} ...`);
-
         const locs: HelpFileLocation[] = [];
-        
+		
+		// check relative to location of currently displayed file (optional)
 		if(prevFileLocation){
 			const truncPath = prevFileLocation.truncPath;
 			locs.push(new HelpFileLocation(truncPath, relPath, fileName));
 		}
 
+		// check relative to home path
 		if(this.homePath){
 			locs.push(new HelpFileLocation(this.homePath, relPath, fileName));
 		}
 
+		// remove leading '/'
 		const parts = relPath.split('/');
 		while(parts.length>0 && parts[0]===''){
 			parts.shift();
 		}
 
+		// only use libPaths for library entries, not e.g. doc
 		if(parts[0]==='library'){
 			parts.shift();
 			const relPath2 = path.join(...parts);
@@ -201,13 +156,14 @@ export class RHelp implements RHelpProvider {
 			}
 		}
 
+		// actually check each possible location for a file
 		for(let loc of locs){
 			const fullPath = path.normalize(path.join(loc.truncPath, loc.relPath, loc.fileName));
 			if(fs.existsSync(fullPath)){
 				const html = fs.readFileSync(fullPath, 'utf-8');
 				console.log(`Found in file ${fullPath}`);
 				const helpFile: HelpFile = {
-					...splitRequestPath(requestPath),
+					requestPath: requestPath,
                     html: html,
                     fileLocation: loc,
                     isRealFile: true
@@ -218,23 +174,25 @@ export class RHelp implements RHelpProvider {
 		return null;
     }
 
-    public extractHelpFileFromRequestPath(requestPath: string): HelpFile|null {
+	// used when no html file is found
+	// extracts the .Rd file from an .rdb archive and converts it to html
+    private extractHelpFileFromRequestPath(requestPath: string): HelpFile|null {
 
-        console.log(`Trying to extract help file for ${requestPath}...`);
-
+		// extract different parts of request path:
         const parts = requestPath.split('/');
-        
         const htmlFileName = parts.pop();
         const htmlDir = parts.pop();
         const pkgName = parts.pop();
         const libraryDir = parts.pop();
 
+		// check if request is for a package library entry:
+        if(!htmlFileName || libraryDir !== 'library' || htmlDir !== 'html'){
+            return null;
+		}
+
         const fncName = htmlFileName.replace(/\.html$/, '');
 
-        if(libraryDir !== 'library' || htmlDir !== 'html'){
-            return null;
-        }
-
+		// check each libPath for the specified package:
         for(const libPath of this.libPaths){
             // directory containing compressed help files:
             const helpDir = path.join(libPath, pkgName, 'help');
@@ -246,7 +204,7 @@ export class RHelp implements RHelpProvider {
                 const html = this.extractHtmlFile(helpDir, pkgName, fncName);
                 if(html){
                     const helpFile: HelpFile = {
-						...splitRequestPath(requestPath),
+						requestPath: requestPath,
                         html: html,
                         isRealFile: false
                     };
@@ -255,12 +213,17 @@ export class RHelp implements RHelpProvider {
 			}
         }
 
-        console.log('Found no help file to extract.');
-
         return null;
     }
 
 	private extractHtmlFile(helpDir: string, pkgName: string, fncName: string): string | null {
+
+		// options used in cp.execSync():
+		const options: cp.ExecSyncOptionsWithStringEncoding = {
+			cwd: helpDir,
+			encoding: 'utf-8'
+		};
+
 		// (lazy)loads the contents of the .rdb file
 		const cmd1a = `"invisible(lazyLoad('${pkgName}'))"`;
 
@@ -270,14 +233,8 @@ export class RHelp implements RHelpProvider {
 		// output file (supposed to be temporary)
 		const rdFileName = path.join(os.tmpdir(), fncName + '.Rd');
 
+        // produce the .Rd file of a function:
 		const cmd1 = `${this.rPath} -e ${cmd1a} -e ${cmd1b} --vanilla --silent --no-echo > ${rdFileName}`;
-
-		const options: cp.ExecSyncOptionsWithStringEncoding = {
-			cwd: helpDir,
-			encoding: 'utf-8'
-		};
-
-        // produce the .Rd file of a function
         try{
             const out1 = cp.execSync(cmd1, options);
         } catch(e){
@@ -305,19 +262,5 @@ export class RHelp implements RHelpProvider {
 
 		return htmlContent;
 	}
-
-
-    public getHtmlFromHelpFile(helpFile: HelpFile): string {
-        if(helpFile.html){
-            return helpFile.html;
-        } else if(helpFile.fileLocation && helpFile.isRealFile){
-            return this.getHtmlFromFileLocation(helpFile.fileLocation);
-        } else if(helpFile.requestPath){
-            helpFile = this.getHelpFileFromRequestPath(helpFile.requestPath);
-            return helpFile.html;
-        } else{
-            return '';
-        }
-    }
 }
 

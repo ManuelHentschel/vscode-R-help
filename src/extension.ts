@@ -2,26 +2,16 @@ import * as vscode from 'vscode';
 
 import * as path from 'path';
 
-import { RHelpPanel, RHelpPanelOptions } from './rHelpPanel';
-import { RHelpClient } from './rHelpClient';
+import { HelpPanel, HelpPanelOptions, HelpProvider } from './rHelpPanel';
+import { RHelpClient } from './rHelpProviderBuiltin';
+import { RHelp } from './rHelpProviderCustom';
 
-
-let extensionPath: string = '';
 
 export function activate(context: vscode.ExtensionContext) {
 
 	console.log('Activating...');
 
-	extensionPath = context.extensionPath;
-
-	const rHelpPanelOptions: RHelpPanelOptions = {
-		rPath: 'R',
-		webviewScriptPath: path.join(context.extensionPath, '/html/script.js'),
-		webviewStylePath: path.join(context.extensionPath, '/html/theme.css'),
-		rHelpProvider: 'custom'
-	};
-
-	const rHelpPanel = new RHelpPanel(rHelpPanelOptions);
+	const rHelpPanel = startHelpPanel(context.extensionPath);
 
 	context.subscriptions.push(rHelpPanel);
 
@@ -31,7 +21,7 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	vscode.commands.registerCommand('rhelp.showDoc', () => {
-		rHelpPanel.showHelp('index.html', 'doc');
+		rHelpPanel.showHelpForFunctionName('index.html', 'doc');
 		// rHelpPanel.show
 	});
 
@@ -42,4 +32,34 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {}
+
+
+function startHelpPanel(extensionPath: string) {
+
+	// might be different for different implementations of HelpProvider
+	const rHelpProviderOptions = {
+		rPath: 'R'
+	};
+	let helpProvider: HelpProvider;
+
+	// dummy setting:
+	const helpProviderType: "custom" | "RServer" = "RServer";
+
+	// @ts-ignore 
+	if(helpProviderType === "custom"){
+		helpProvider = new RHelp(rHelpProviderOptions);
+	} else {
+		helpProvider = new RHelpClient(rHelpProviderOptions);
+	}
+
+	const rHelpPanelOptions: HelpPanelOptions = {
+		webviewScriptPath: path.join(extensionPath, path.normalize('/html/script.js')),
+		webviewStylePath: path.join(extensionPath, path.normalize('/html/theme.css'))
+	};
+
+	const rHelpPanel = new HelpPanel(helpProvider, rHelpPanelOptions);
+
+	return rHelpPanel;
+}
+
 

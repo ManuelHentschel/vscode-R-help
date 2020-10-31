@@ -1,66 +1,96 @@
 
 import * as vscode from 'vscode';
 
-import * as rHelp from './rHelpProvider';
-
 import * as jsdom from 'jsdom';
 
-import * as fs from 'fs';
-
 import * as hljs from 'highlight.js';
-import { RHelpClient } from './rHelpClient';
 
 
 
-export interface RHelpPanelOptions extends rHelp.RHelpOptions {
+
+// This interface needs to be implemented by  separate class that actually provides the R help pages
+export interface HelpProvider {
+	// is called to get help for a request path
+	// the request path is the part of the help url after http://localhost:PORT/... when using R's help
+	getHelpFileFromRequestPath(requestPath: string, options?: RHelpProviderOptions): null|HelpFile|Promise<HelpFile>;
+
+	// optional functions to get help for doc file or functions from packages
+	getHelpFileForDoc?(fncName: string): null|HelpFile|Promise<HelpFile>;
+	getHelpFileForFunction?(pkgName: string, fncName: string): null|HelpFile|Promise<HelpFile>;
+
+	// called to e.g. close servers, delete files
+	dispose?(): void;
+}
+
+export interface HelpFile {
+	// content of the file
+	html: string;
+	// whether the html has been modified already (syntax highlighting etc.)
+	isModified?: boolean;
+	// path as used by help server. Uses '/' as separator!
+	requestPath: string;
+    // if the file is a real file
+    isRealFile?: boolean;
+}
+
+// currently dummy
+export interface RHelpProviderOptions {}
+
+
+// internal interface used to store history of help panel
+interface HistoryEntry {
+	helpFile: HelpFile;
+	scrollStatus?: number; // currently a dummy
+};
+
+
+// specified when creating a new help panel
+export interface HelpPanelOptions {
 	/* Local path of script.js, used to send messages to vs code */
 	webviewScriptPath: string;
 	/* Local path of theme.css, used to actually format the highlighted syntax */
 	webviewStylePath: string;
-	/* which provider to use for source info: custom implementation or builtin */
-	rHelpProvider: "custom"|"builtin";
 }
 
-interface HistoryEntry {
-	pkgName: string;
-	fncName: string;
-	helpFile: rHelp.HelpFile;
-	scrollStatus?: number;
-};
+export class HelpPanel {
+	// the object that actually provides help pages:
+	readonly helpProvider: HelpProvider;
 
-export class RHelpPanel {
-	readonly rHelp: rHelp.RHelpProvider;
-	// readonly rHelp: rHelp.RHelp;
-
+	// the webview panel where the help is shown
 	private panel?: vscode.WebviewPanel;
+
+	// locations on disk, only changed on construction
+	readonly webviewScriptFile: vscode.Uri; // the javascript added to help pages
+	readonly webviewStyleFile: vscode.Uri; // the css file applied to help pages
+
+	// virtual locations used by webview, changed each time a new webview is created
 	private webviewScriptUri?: vscode.Uri;
-	readonly webviewScriptFile: vscode.Uri;
-
 	private webviewStyleUri?: vscode.Uri;
-	readonly webviewStyleFile: vscode.Uri;
 	
-
+	// keep track of history to go back/forward:
 	private currentEntry: HistoryEntry|null = null;
 	private history: HistoryEntry[] = [];
 	private forwardHistory: HistoryEntry[] = [];
 
-	constructor(options: RHelpPanelOptions){
-		if(options.rHelpProvider === 'custom'){
-			this.rHelp = new rHelp.RHelp(options);
-		} else{ // === 'builtin'
-			this.rHelp = new RHelpClient(options);
-		}
+
+
+	constructor(rHelp: HelpProvider, options: HelpPanelOptions){
+		this.helpProvider = rHelp;
 		this.webviewScriptFile = vscode.Uri.file(options.webviewScriptPath);
 		this.webviewStyleFile = vscode.Uri.file(options.webviewStylePath);
 	}
 
+	// used to close files etc.
 	public dispose(){
-		this.rHelp.dispose();
+		if(this.helpProvider.dispose){
+			this.helpProvider.dispose();
+		}
 		if(this.panel){
 			this.panel.dispose();
 		}
 	}
 
+	// prompts user for a package and function name to show:
 	public async showHelpForInput(){
 		const pkgName = await vscode.window.showInputBox({
 			value: 'utils',
@@ -76,39 +106,37 @@ export class RHelpPanel {
 		if(!fncName){
 			return false;
 		}
+		// changes e.g. ".vsc.print" to "dot-vsc.print"
 		fncName = fncName.replace(/^\./, 'dot-');
-		this.showHelp(fncName, pkgName);
+		this.showHelpForFunctionName(fncName, pkgName);
 	}
 
-	public getWebview(): vscode.Webview {
-		if(this.panel){
-			return this.panel.webview;
+	// shows help for package and function name
+	public showHelpForFunctionName(fncName: string, pkgName: string){
+		let helpFile: HelpFile|Promise<HelpFile>;
+
+		if(pkgName === 'doc'){
+			if(this.helpProvider.getHelpFileForDoc){
+				helpFile = this.helpProvider.getHelpFileForDoc(fncName);
+			} else{
+				const requestPath = `doc/html/${fncName}`;
+				helpFile = this.helpProvider.getHelpFileFromRequestPath(requestPath);
+			}
 		} else{
-			const webViewOptions: vscode.WebviewOptions = {
-				enableScripts: true,
-			};
-			this.panel = vscode.window.createWebviewPanel('rhelp', 'R Help', vscode.ViewColumn.Two, webViewOptions);
-
-			this.panel.onDidDispose((e: void) => {
-				this.panel = undefined;
-				this.webviewScriptUri = undefined;
-				this.webviewStyleUri = undefined;
-			});
-
-			this.webviewScriptUri = this.panel.webview.asWebviewUri(this.webviewScriptFile);
-			this.webviewStyleUri = this.panel.webview.asWebviewUri(this.webviewStyleFile);
+			if(this.helpProvider.getHelpFileForFunction){
+				helpFile = this.helpProvider.getHelpFileForFunction(pkgName, fncName);
+			} else{
+				const requestPath = `library/${pkgName}/html/${fncName}.html`;
+				helpFile = this.helpProvider.getHelpFileFromRequestPath(requestPath);
+			}
 		}
 
-		this.panel.webview.onDidReceiveMessage((e: any) => {
-			console.log('received message');
-			this.handleMessage(e);
-		});
-
-		return this.panel.webview;
+		this.showHelpFile(helpFile);
 	}
 
+	// shows help for request path as used by R's internal help server
 	public showHelpForPath(requestedPath: string){
-		const helpFile = this.rHelp.getHelpFileFromRequestPath(requestedPath, this.currentEntry.helpFile.fileLocation);
+		const helpFile = this.helpProvider.getHelpFileFromRequestPath(requestedPath);
 
 		if(helpFile){
 			this.showHelpFile(helpFile);
@@ -117,114 +145,130 @@ export class RHelpPanel {
 		}
 	}
 
-	public showHelp(fncName: string, pkgName?: string, updateHistory: boolean = true){
-		if(this.currentEntry){
-			pkgName = pkgName || this.currentEntry.pkgName;
-		}
-		if(!pkgName){
-			throw new Error('No package name specified or stored!');
-		}
+	// shows (internal) help file object in webview
+	private async showHelpFile(helpFile: HelpFile|Promise<HelpFile>, updateHistory: boolean = true): Promise<void>{
 
-		let helpFile: rHelp.HelpFile|Promise<rHelp.HelpFile>;
-
-		if(pkgName === 'doc'){
-			helpFile = this.rHelp.getHelpFileForDoc(fncName);
-		} else{
-			helpFile = this.rHelp.getHelpFileForFunction(pkgName, fncName);
-		}
-
-		this.showHelpFile(helpFile, pkgName, updateHistory);
-	}
-
-	public async showHelpFile(helpFile: rHelp.HelpFile|Promise<rHelp.HelpFile>, pkgName: string='', updateHistory: boolean = true){
-
+		// get or create webview:
 		const webview = this.getWebview();
 
+		// make sure helpFile is not a promise:
 		helpFile = await helpFile;
 
-		let html = pimpMyHelp(helpFile.html, helpFile.requestDirname);
+		let html: string = helpFile.html;
 
-		const fncName = helpFile.requestFilename.replace(/\.html$/, '');
+		if(!helpFile.isModified){
+			// remove filename
+			const parts = helpFile.requestPath.split('/');
+			parts.pop();
+			const relPath = parts.join('/');
 
-		// for debugging:
-		if(false){
-			let htmlFile = html + `\n<link rel="stylesheet" href="theme.css"></link>`;
-			htmlFile += `\n<script src="script.js"></script>`;
-			fs.writeFileSync(`html/${fncName}.html`, htmlFile);
+			// modify html
+			let html = pimpMyHelp(helpFile.html, relPath);
+
+			// add custom stylesheet and javascript
+			html += `\n<link rel="stylesheet" href="${this.webviewStyleUri}"></link>`;
+			html += `\n<script src=${this.webviewScriptUri}></script>`;
+
+			// store modified version
+			helpFile.html = html;
+			helpFile.isModified = true;
 		}
 
-		html += `\n<link rel="stylesheet" href="${this.webviewStyleUri}"></link>`;
-		html += `\n<script src=${this.webviewScriptUri}></script>`;
-
-
+		// actually show the hel page
 		webview.html = html;
 
+		// update history to enable back/forward
 		if(updateHistory){
 			if(this.currentEntry){
 				this.history.push(this.currentEntry);
 			}
 			this.forwardHistory = [];
 		}
-
-		const helpFilePath = helpFile.requestPath;
-
 		this.currentEntry = {
-			pkgName: pkgName,
-			fncName: fncName,
 			scrollStatus: 0,
 			helpFile: helpFile
 		};
 	}
 
-	private showHistoryEntry(entry: HistoryEntry){
-		const pkgName = entry.pkgName;
-		const fncName = entry.fncName;
-		const helpFile = entry.helpFile;
-		this.showHelpFile(helpFile, pkgName, false);
+	// retrieves the stored webview or creates a new one if the webview was closed
+	private getWebview(): vscode.Webview {
+		// create webview if necessary
+		if(!this.panel){
+			const webViewOptions: vscode.WebviewOptions = {
+				enableScripts: true,
+			};
+			this.panel = vscode.window.createWebviewPanel('rhelp', 'R Help', vscode.ViewColumn.Two, webViewOptions);
+
+			// virtual uris used to access local files
+			this.webviewScriptUri = this.panel.webview.asWebviewUri(this.webviewScriptFile);
+			this.webviewStyleUri = this.panel.webview.asWebviewUri(this.webviewStyleFile);
+
+			// called e.g. when the webview panel is closed by the user
+			this.panel.onDidDispose((e: void) => {
+				this.panel = undefined;
+				this.webviewScriptUri = undefined;
+				this.webviewStyleUri = undefined;
+			});
+
+			// sent by javascript added to the help pages, e.g. when a link or mouse button is clicked
+			this.panel.webview.onDidReceiveMessage((e: any) => {
+				this.handleMessage(e);
+			});
+		}
+
+		return this.panel.webview;
 	}
 
+	// go back/forward in the history of the webview:
 	private goBack(){
 		const entry = this.history.pop();
 		if(entry){
-			if(this.currentEntry){
+			if(this.currentEntry){ // should always be true
 				this.forwardHistory.push(this.currentEntry);
 			}
 			this.showHistoryEntry(entry);
 		}
 	}
-
 	private goForward(){
 		const entry = this.forwardHistory.pop();
 		if(entry){
-			if(this.currentEntry){
+			if(this.currentEntry){ // should always be true
 				this.history.push(this.currentEntry);
 			}
 			this.showHistoryEntry(entry);
 		}
 	}
+	private showHistoryEntry(entry: HistoryEntry){
+		const helpFile = entry.helpFile;
+		this.showHelpFile(helpFile, false);
+	}
 
-	private async handleMessage(msg: any){
+	// handle message produced by javascript inside the help page
+	private handleMessage(msg: any){
 		if(msg.message === 'linkClicked'){
-			const t0 = new Date();
+			// handle hyperlinks clicked in the webview
+			// normal navigation does not work in webviews (even on localhost)
 			const href: string = msg.href || '';
-			const uri = vscode.Uri.parse(href);
-
 			console.log('Link clicked: ' + href);
 
+			// remove first to path entries (these are webview internal stuff):
+			const uri = vscode.Uri.parse(href);
 			const parts = uri.path.split('/');
-
 			parts.shift();
 			parts.shift();
 
-			const path2 = parts.join('/');
+			// actual request path as used by R:
+			const requestPath = parts.join('/');
 
-			const helpFile = await this.rHelp.getHelpFileFromRequestPath(path2);
+			// retrieve helpfile for path:
+			const helpFile = this.helpProvider.getHelpFileFromRequestPath(requestPath);
 
+			// if successful, show helpfile:
 			if(helpFile){
 				this.showHelpFile(helpFile);
 			}
-
 		} else if(msg.message === 'mouseClick'){
+			// use the additional mouse buttons to go forward/backwards
 			const button: number = msg.button || 0;
 			if(button === 3){
 				this.goBack();
@@ -232,6 +276,7 @@ export class RHelpPanel {
 				this.goForward();
 			}
 		} else if(msg.message === 'text'){
+			// used for logging/debugging
 			console.log('Message (text): ' + msg.text);
 		} else{
 			console.log('Unknown message:', msg);
@@ -239,6 +284,9 @@ export class RHelpPanel {
 	}
 }
 
+
+
+// improves the help display by applying syntax highlighting and adjusting hyperlinks:
 function pimpMyHelp(html: string, relPath: string = ''): string {
 
 	// parse the html string
@@ -250,17 +298,21 @@ function pimpMyHelp(html: string, relPath: string = ''): string {
 	// check length here, to be sure it doesn't change during the loop:
 	const nSec = codeSections.length; 
 
+	// apply syntax highlighting to each code section:
 	for(let i=0; i<nSec; i++){
-		// apply syntax highlighting to each code section:
 		const section = codeSections[i].textContent || '';
-		const html3 = hljs.highlight('r', section);
-		codeSections[i].innerHTML = html3.value;
+		const highlightedHtml = hljs.highlight('r', section);
+		codeSections[i].innerHTML = highlightedHtml.value;
 	}
 
+	// adjust hyperlinks to be relative to the specified path:
 	if(relPath){
-		relPath = relPath.replace(/\\/g, '/');
+		relPath = relPath.replace(/\\/g, '/'); // in case relPath is a windows path
 		const links = dom.window.document.getElementsByTagName('a');
 		const nLinks = links.length;
+
+		// adjust each hyperlink to be relative to the specified relPath
+		// is very costly for many links!
 		for(let i=0; i<nLinks; i++){
 			let href = links[i].getAttribute('href');
 			if(href){
@@ -273,8 +325,6 @@ function pimpMyHelp(html: string, relPath: string = ''): string {
 		}
 	}
 
-	html = dom.serialize();
-
 	// return the html of the modified page:
-	return html;
+	return dom.serialize();
 }
