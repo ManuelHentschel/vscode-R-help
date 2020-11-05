@@ -1,3 +1,7 @@
+
+# ***NOTE:** See [PR #433](https://github.com/Ikuyadeu/vscode-R/pull/433) for an integration of this repository in vscode-R*
+
+
 # vscode-R-help
 
 VS Code extension that adds the command `rhelp.showHelp` to provide help for R functions/packages.
